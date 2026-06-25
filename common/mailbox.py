@@ -87,9 +87,24 @@ def fetch_messages(access_token, folder, top=10):
         f"?$top={top}&$orderby=receivedDateTime desc"
         f"&$select=subject,from,body,bodyPreview,receivedDateTime"
     )
+    # 经代理首个 TLS 握手常 SSLEOFError、重试即通(实测 try1 失败 try2 即 200)。原来一抖就 return []
+    # 让整个 40s 轮询窗口每次都冷连接首发失败、白白超时回退浏览器。这里对连接类错误快速重试 3 次。
+    r = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            break
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt < 2:
+                time.sleep(1.5)
+                continue
+            print(f"  [mail] fetch {folder} 连接抖动(重试用尽): {str(e)[:70]}")
+            return []
+        except Exception as e:
+            print(f"  [mail] fetch {folder} error: {e}")
+            return []
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200:
+        if r is None or r.status_code != 200:
             return []
         out = []
         for m in r.json().get("value", []):
@@ -101,7 +116,7 @@ def fetch_messages(access_token, folder, top=10):
             })
         return out
     except Exception as e:
-        print(f"  [mail] fetch {folder} error: {e}")
+        print(f"  [mail] fetch {folder} parse error: {e}")
         return []
 
 
